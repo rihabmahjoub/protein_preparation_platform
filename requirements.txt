@@ -1,0 +1,10 @@
+flask>=3.0.3
+biopython>=1.84
+py3Dmol>=2.4.0
+requests>=2.32.3
+pandas>=2.2.2
+numpy>=2.0.0
+matplotlib>=3.9.2
+fpdf2>=2.7.9
+scipy>=1.13.1
+MDAnalysis>=2.7.0

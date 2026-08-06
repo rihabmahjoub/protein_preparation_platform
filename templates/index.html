@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Protein Preparation for Docking</title>
+<style>
+:root{
+  --bg:#FAF7F7;--white:#FFFFFF;
+  --burg:#8B1A2A;--burg2:#6B0F1F;--burg-lt:#F9ECED;--burg-md:#D4949C;
+  --txt:#1A1A1A;--muted:#6B6B6B;--border:#E0D0D0;
+  --ok:#166534;--ok-bg:#F0FDF4;--ok-bd:#86EFAC;
+  --warn:#92400E;--warn-bg:#FFFBEB;--warn-bd:#FCD34D;
+  --err:#991B1B;--err-bg:#FEF2F2;--err-bd:#FCA5A5;
+  --info-bg:#FDF6F6;--info-bd:#D4949C;--info-txt:#6B0F1F;
+  --sh:0 1px 4px rgba(0,0,0,.07);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  background:var(--bg);color:var(--txt);font-size:13px;
+  display:flex;flex-direction:column;min-height:100vh}
+header{background:var(--burg2);color:#fff;padding:.72rem 1.6rem;
+  display:flex;align-items:center;gap:1rem;flex-shrink:0;
+  box-shadow:0 2px 5px rgba(0,0,0,.18)}
+header h1{font-size:.98rem;font-weight:600}
+header p{font-size:.69rem;opacity:.72;margin-top:1px}
+header .badge{margin-left:auto;font-size:.62rem;background:rgba(255,255,255,.15);
+  border:1px solid rgba(255,255,255,.25);border-radius:3px;padding:2px 8px}
+.wrap{max-width:1060px;margin:0 auto;width:100%;padding:1.1rem 1.4rem;flex:1}
+/* Step navigation */
+.steps{display:flex;border:1px solid var(--border);border-radius:6px;
+  overflow:hidden;background:var(--white);box-shadow:var(--sh);margin-bottom:1.2rem}
+.sh{flex:1;padding:.65rem .4rem;text-align:center;cursor:pointer;
+  border-right:1px solid var(--border);transition:all .14s;
+  display:flex;flex-direction:column;align-items:center;gap:3px}
+.sh:last-child{border-right:none}
+.sh:hover{background:var(--burg-lt)}
+.sh.on{background:var(--burg);color:#fff}
+.sh.done{background:var(--ok-bg);color:var(--ok)}
+.sn{font-size:.62rem;font-weight:700;letter-spacing:.06em;opacity:.72}
+.sh.on .sn{color:#fff;opacity:.85}
+.sl{font-size:.84rem;font-weight:700}
+/* Panels */
+.panel{display:none;background:var(--white);border:1px solid var(--border);
+  border-radius:6px;padding:1.05rem 1.2rem;box-shadow:var(--sh);margin-bottom:.9rem}
+.panel.on{display:block}
+.ph{font-size:.78rem;font-weight:700;color:var(--burg2);
+  text-transform:uppercase;letter-spacing:.06em;margin-bottom:.75rem;
+  padding-bottom:.48rem;border-bottom:1px solid var(--border)}
+/* Why-this-matters */
+.wtm{background:var(--burg-lt);border-left:3px solid var(--burg);
+  border-radius:0 4px 4px 0;padding:.48rem .72rem;
+  font-size:.74rem;line-height:1.55;margin:.48rem 0;color:var(--txt)}
+.wtm strong{color:var(--burg2)}
+/* Source toggle */
+.src-tog{display:inline-flex;border:1px solid var(--border);border-radius:4px;
+  overflow:hidden;margin-bottom:.58rem}
+.sb{padding:.36rem .82rem;font-size:.74rem;border:none;background:none;
+  color:var(--muted);cursor:pointer;transition:all .14s}
+.sb.on{background:var(--burg);color:#fff}
+.lp{display:none;flex-direction:column;gap:.42rem}
+.lp.on{display:flex}
+/* Inputs */
+input[type=text]{border:1px solid var(--border);border-radius:4px;
+  padding:.38rem .6rem;font-size:.79rem;color:var(--txt);outline:none;
+  transition:border-color .14s;background:var(--white);width:100%}
+input[type=text]:focus{border-color:var(--burg);box-shadow:0 0 0 3px rgba(139,26,42,.1)}
+input[type=file]{font-size:.73rem;color:var(--muted)}
+input[type=number]{border:1px solid var(--border);border-radius:4px;
+  padding:.36rem .52rem;font-size:.79rem;color:var(--txt);outline:none;width:85px}
+input[type=number]:focus{border-color:var(--burg)}
+input[type=range]{accent-color:var(--burg);width:155px}
+/* Buttons */
+.btn{border:none;border-radius:4px;cursor:pointer;font-size:.78rem;
+  font-weight:500;padding:.4rem .9rem;transition:all .14s;
+  display:inline-flex;align-items:center;gap:.32rem}
+.btn:hover{opacity:.87}
+.btn-b{background:var(--burg);color:#fff}
+.btn-o{background:var(--white);border:1px solid var(--border);color:var(--muted)}
+.btn-o:hover{border-color:var(--burg);color:var(--burg)}
+/* Banners */
+.bnr{border-radius:4px;padding:.47rem .72rem;font-size:.74rem;
+  line-height:1.55;margin:.44rem 0}
+.bnr-info{background:var(--info-bg);border:1px solid var(--info-bd);color:var(--info-txt)}
+.bnr-ok{background:var(--ok-bg);border:1px solid var(--ok-bd);color:var(--ok)}
+.bnr-warn{background:var(--warn-bg);border:1px solid var(--warn-bd);color:var(--warn)}
+.bnr-err{background:var(--err-bg);border:1px solid var(--err-bd);color:var(--err)}
+/* Layout */
+.row{display:flex;gap:.6rem;align-items:flex-end;flex-wrap:wrap;margin-bottom:.65rem}
+.col{display:flex;flex-direction:column;gap:2px}
+.lbl{font-size:.7rem;color:var(--muted)}
+.chk-row{display:flex;gap:.85rem;flex-wrap:wrap;margin-bottom:.6rem}
+.chk{display:flex;align-items:center;gap:5px;font-size:.77rem;cursor:pointer}
+input[type=checkbox]{accent-color:var(--burg)}
+/* Metrics */
+.mets{display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));
+  gap:.45rem;margin:.55rem 0}
+.met{background:var(--bg);border:1px solid var(--border);border-radius:4px;
+  padding:.47rem .54rem;text-align:center}
+.met .v{font-size:1.05rem;font-weight:700;color:var(--burg)}
+.met .l{font-size:.61rem;color:var(--muted);margin-top:2px}
+.met.ok .v{color:var(--ok)} .met.wn .v{color:#C05C1A} .met.er .v{color:var(--err)}
+/* Viewer */
+.viewer{border:1px solid var(--border);border-radius:5px;overflow:hidden;margin-top:.65rem}
+.viewer iframe,.vph{width:100%;height:390px;border:none;display:block}
+.vph{display:flex;align-items:center;justify-content:center;
+  color:var(--muted);background:var(--bg);font-size:.78rem;
+  flex-direction:column;gap:.4rem}
+/* Viewer color buttons */
+.vcb-row{display:flex;gap:.3rem;margin:.45rem 0}
+.vcb{background:var(--bg);border:1px solid var(--border);color:var(--muted);
+  padding:.28rem .6rem;border-radius:3px;font-size:.69rem;cursor:pointer}
+.vcb:hover,.vcb.on{background:var(--burg);color:#fff;border-color:var(--burg)}
+/* Table */
+.tw{overflow-x:auto;max-height:220px;overflow-y:auto;
+  border:1px solid var(--border);border-radius:4px;margin-top:.55rem}
+table{width:100%;border-collapse:collapse;font-size:.73rem}
+th{background:var(--bg);color:var(--muted);padding:4px 8px;text-align:left;
+  border-bottom:1px solid var(--border);font-weight:600;font-size:.66rem;
+  text-transform:uppercase;letter-spacing:.04em;position:sticky;top:0;z-index:1}
+td{padding:4px 8px;border-bottom:1px solid var(--border);color:var(--txt)}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--burg-lt)}
+/* PDBQT preview */
+.pre{font-family:'Courier New',monospace;font-size:.68rem;background:#1A0A0E;
+  color:#F4A7B9;padding:.7rem .9rem;border-radius:4px;overflow-x:auto;
+  max-height:190px;overflow-y:auto;margin-top:.55rem}
+/* Pocket cards */
+.pc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(195px,1fr));
+  gap:.55rem;margin:.55rem 0}
+.pc{background:var(--bg);border:1px solid var(--border);border-radius:5px;
+  padding:.65rem .78rem;cursor:pointer;transition:all .14s}
+.pc:hover,.pc.on{border-color:var(--burg);background:var(--burg-lt)}
+.pc h4{font-size:.8rem;font-weight:700;color:var(--burg2);margin-bottom:3px}
+.pc-meta{font-size:.71rem;color:var(--muted);line-height:1.65}
+.bar-bg{height:6px;background:var(--border);border-radius:3px;margin-top:.32rem}
+.bar-fill{height:100%;border-radius:3px;background:var(--burg)}
+/* Downloads */
+.dlr{display:flex;gap:.42rem;flex-wrap:wrap;margin-top:.65rem}
+a.dlb{display:inline-flex;align-items:center;gap:.28rem;
+  padding:.32rem .72rem;border:1px solid var(--border);border-radius:4px;
+  font-size:.72rem;color:var(--muted);text-decoration:none;background:var(--white)}
+a.dlb:hover{border-color:var(--burg);color:var(--burg)}
+img.plot{max-width:100%;border-radius:4px;margin-top:.48rem;
+  border:1px solid var(--border);background:white}
+/* Pocket param helper */
+.param-help{font-size:.71rem;color:var(--muted);font-style:italic;margin-top:2px}
+.sp{display:inline-block;width:10px;height:10px;
+  border:1.5px solid var(--border);border-top-color:var(--burg);
+  border-radius:50%;animation:rot .65s linear infinite;
+  vertical-align:middle;margin-right:4px}
+@keyframes rot{to{transform:rotate(360deg)}}
+footer{background:var(--white);border-top:1px solid var(--border);
+  padding:.42rem 1.5rem;font-size:.66rem;color:var(--muted);
+  display:flex;justify-content:space-between;align-items:center;flex-shrink:0}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Protein Preparation for Docking</h1>
+    <p>Structure preparation · Protonation analysis · Binding site detection</p>
+  </div>
+  <div class="badge">AutoDock Vina · PDBFixer · RCSB PDB</div>
+</header>
+<div class="wrap">
+<!-- Step bar -->
+<div class="steps">
+  <div class="sh on" id="sh-1" onclick="go(1)">
+    <div class="sn">STEP 1</div><div class="sl">Load PDB</div>
+  </div>
+  <div class="sh" id="sh-2" onclick="go(2)">
+    <div class="sn">STEP 2</div><div class="sl">Quality</div>
+  </div>
+  <div class="sh" id="sh-3" onclick="go(3)">
+    <div class="sn">STEP 3</div><div class="sl">Prepare</div>
+  </div>
+  <div class="sh" id="sh-4" onclick="go(4)">
+    <div class="sn">STEP 4</div><div class="sl">Protonation</div>
+  </div>
+  <div class="sh" id="sh-5" onclick="go(5)">
+    <div class="sn">STEP 5</div><div class="sl">PDBQT</div>
+  </div>
+  <div class="sh" id="sh-6" onclick="go(6)">
+    <div class="sn">STEP 6</div><div class="sl">Binding Sites</div>
+  </div>
+</div>
+
+<!-- Step 1 -->
+<div class="panel on" id="p-1">
+  <div class="ph">Step 1 — Load protein structure</div>
+  <div class="src-tog">
+    <button class="sb on" onclick="switchSrc('rcsb',this)">RCSB PDB</button>
+    <button class="sb" onclick="switchSrc('up',this)">Local file</button>
+  </div>
+  <div class="lp on" id="lp-rcsb">
+    <div class="lbl">4-character PDB ID</div>
+    <div class="row">
+      <input type="text" id="pdbid" placeholder="e.g. 5K5X" maxlength="4"
+             style="width:110px;text-transform:uppercase"
+             onkeydown="if(event.key==='Enter')loadRCSB()">
+      <button class="btn btn-b" onclick="loadRCSB()">Fetch from RCSB</button>
+    </div>
+  </div>
+  <div class="lp" id="lp-up">
+    <div class="lbl">PDB file (.pdb)</div>
+    <div class="row">
+      <input type="file" id="pdbfile" accept=".pdb">
+      <button class="btn btn-b" onclick="uploadFile()">Load file</button>
+    </div>
+  </div>
+  <div id="load-s"></div>
+  <div id="load-meta" style="margin-top:.45rem"></div>
+  <div class="vcb-row">
+    <button class="vcb on" onclick="setVCol('chain',this)">Chain</button>
+    <button class="vcb" onclick="setVCol('bfactor',this)">B-factor</button>
+  </div>
+  <div class="viewer" id="v-1"><div class="vph">Load a structure to display</div></div>
+</div>
+
+<!-- Step 2 -->
+<div class="panel" id="p-2">
+  <div class="ph">Step 2 — Quality assessment</div>
+  <div class="wtm">
+    <strong>What this shows:</strong> Backbone completeness, missing residues,
+    B-factor distribution, heterogens and water count before any preparation.
+    High B-factors indicate flexible or disordered regions. Missing residues
+    will be reconstructed in Step 3.
+  </div>
+  <div id="q-before"></div>
+  <div id="q-miss"></div>
+  <div class="vcb-row">
+    <button class="vcb on" onclick="setVCol2('chain',this)">Chain</button>
+    <button class="vcb" onclick="setVCol2('bfactor',this)">B-factor</button>
+  </div>
+  <div class="viewer" id="v-2"><div class="vph">Click a colour option to display</div></div>
+</div>
+
+<!-- Step 3 -->
+<div class="panel" id="p-3">
+  <div class="ph">Step 3 — Structure preparation (PDBFixer)</div>
+  <div class="wtm">
+    <strong>What PDBFixer does:</strong> Removes solvent molecules and heterogens
+    (ligands, ions), reconstructs missing residues and heavy atoms using a force-field
+    template, then adds hydrogen atoms at the specified pH. The resulting structure
+    is ready for protonation review and PDBQT conversion.
+    <br><em>Ref: Eastman P et al. (2013) J Chem Theory Comput 9:461–469.</em>
+  </div>
+  <div class="chk-row">
+    <label class="chk"><input type="checkbox" id="ck-het" checked> Remove heterogens</label>
+    <label class="chk"><input type="checkbox" id="ck-wat" checked> Remove water</label>
+    <label class="chk"><input type="checkbox" id="ck-res" checked> Reconstruct missing residues</label>
+    <label class="chk"><input type="checkbox" id="ck-h"   checked> Add hydrogen atoms</label>
+  </div>
+  <div class="row">
+    <div class="col"><div class="lbl">Target pH</div>
+      <input type="number" id="fix-ph" value="7.4" min="0" max="14" step="0.1"></div>
+    <button class="btn btn-b" onclick="doFix()">Run PDBFixer</button>
+    <button class="btn btn-o" onclick="window.location='/api/download_fixed_pdb'">↓ Download prepared PDB</button>
+  </div>
+  <div id="fix-s"></div>
+  <div id="fix-changes"></div>
+  <div id="q-after" style="margin-top:.6rem"></div>
+  <div class="viewer" id="v-3"><div class="vph">Prepared structure will appear here</div></div>
+</div>
+
+<!-- Step 4 -->
+<div class="panel" id="p-4">
+  <div class="ph">Step 4 — Protonation state analysis</div>
+  <div class="wtm">
+    <strong>What this step does:</strong> PDBFixer already added hydrogens at the
+    target pH (Step 3). This step <em>verifies</em> those assignments using the
+    Henderson-Hasselbalch equation and identifies residues where the protonation
+    choice is ambiguous — i.e., where |pH − pKa| &lt; 2 units. This does not
+    modify the structure; it guides you on which residues to check manually.
+    <br><br>
+    <strong>Why it matters for docking:</strong> Histidine tautomers (HID/HIE/HIP)
+    and cysteine protonation state can change hydrogen-bond patterns in the binding
+    site and significantly alter docking scores. Ignoring this is a common source
+    of error in published docking studies.
+    <br><br>
+    <strong>Figures explained:</strong> Left — count of each titratable residue type.
+    Right — fraction protonated at the target pH for ambiguous residues (red = mostly
+    protonated, blue = mostly deprotonated). Residues close to 0.5 are most uncertain.
+  </div>
+  <div class="row">
+    <div class="col"><div class="lbl">pH</div>
+      <input type="number" id="prot-ph" value="7.4" min="0" max="14" step="0.1"></div>
+    <button class="btn btn-b" onclick="doProt()">Analyse protonation states</button>
+  </div>
+  <div id="prot-s"></div>
+  <div id="prot-mets" class="mets"></div>
+  <div id="prot-recs"></div>
+  <img id="prot-img" class="plot" style="display:none">
+  <div id="prot-tbl" class="tw"></div>
+</div>
+
+<!-- Step 5 -->
+<div class="panel" id="p-5">
+  <div class="ph">Step 5 — PDBQT conversion (AutoDock Vina receptor)</div>
+  <div class="wtm">
+    <strong>What PDBQT is:</strong> The format required by AutoDock Vina for the
+    rigid receptor. Only heavy atoms and polar hydrogens (bonded to N, O, S) are
+    retained. AutoDock 4 atom types are assigned. Vina's own scoring function does
+    not use receptor partial charges, so placeholder values (0.000) are written.
+    <br><em>Ref: Trott O &amp; Olson AJ (2010) J Comput Chem 31:455–461.</em>
+  </div>
+  <div class="row">
+    <button class="btn btn-b" onclick="doConvert()">Generate PDBQT</button>
+    <button class="btn btn-o" id="dl-pdbqt" style="display:none"
+            onclick="window.location='/api/download_pdbqt'">↓ Download .pdbqt</button>
+  </div>
+  <div id="conv-s"></div>
+  <div id="conv-pre" class="pre" style="display:none"></div>
+</div>
+
+<!-- Step 6 -->
+<div class="panel" id="p-6">
+  <div class="ph">Step 6 — Binding site prediction</div>
+  <div class="wtm">
+    <strong>How it works:</strong> The protein is mapped onto a 3D grid. Voxels
+    occupied by protein atoms (VDW + probe radius) are marked. All remaining free
+    voxels connected to the grid boundary are labelled as exterior solvent. Any
+    enclosed free cavity is a candidate pocket, ranked by druggability score.
+    <br><br>
+    <strong>Druggability score</strong> (0–1, Halgren 2009): combines pocket volume
+    (optimal ~700 Å³), hydrophobic content (&gt;50% favours drug binding), and
+    buriedness. Scores above 0.5 suggest a potentially druggable site.
+    <br><br>
+    <strong>Lining residues</strong> highlighted in red on the viewer give the
+    coordinates for the AutoDock Vina grid box.
+  </div>
+  <div class="row" style="align-items:flex-start">
+    <div class="col">
+      <div class="lbl">Grid resolution (Å)</div>
+      <input type="number" id="p-res" value="1.0" min="0.6" max="2.0" step="0.1">
+      <div class="param-help">Smaller = more accurate, slower. Use 1.5 for large proteins.</div>
+    </div>
+    <div class="col">
+      <div class="lbl">Min. pocket volume (Å³)</div>
+      <input type="number" id="p-vol" value="150" min="50" max="2000" step="50">
+      <div class="param-help">Raise to filter false positives. Typical drug sites: 300–1000 Å³.</div>
+    </div>
+    <div class="col">
+      <div class="lbl">Max. sites to report</div>
+      <input type="number" id="p-n" value="5" min="1" max="10">
+    </div>
+    <button class="btn btn-b" style="align-self:flex-end" onclick="doPockets()">Detect binding sites</button>
+  </div>
+  <div id="poc-s"></div>
+  <img id="poc-img" class="plot" style="display:none">
+  <div id="poc-cards" class="pc-grid"></div>
+  <div id="poc-tbl" class="tw"></div>
+  <div class="viewer" id="v-6"><div class="vph">Binding sites will appear on the structure</div></div>
+</div>
+</div><!-- .wrap -->
+
+<footer>
+  <span>Protein Preparation for Docking — PDBFixer · AutoDock Vina · Grid-based pocket detection</span>
+  <span>BIMS Lab | Institut Pasteur de Tunis</span>
+</footer>
+<script>
+const $=id=>document.getElementById(id);
+const pj=(url,b)=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(r=>r.json());
+const sp=t=>`<span class="sp"></span>${t}`;
+const bnr=(id,t,c)=>{const e=$(id);if(e)e.innerHTML=`<div class="bnr bnr-${c}">${t}</div>`;};
+const tbl=(rows,cols)=>{
+  if(!rows||!rows.length)return'<div class="bnr bnr-warn">No results.</div>';
+  return`<table><thead><tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr></thead><tbody>${
+    rows.map(r=>'<tr>'+cols.map(c=>`<td>${r[c]??''}</td>`).join('')+'</tr>').join('')
+  }</tbody></table>`;
+};
+function pv(el,html){
+  el.innerHTML='';
+  const fr=document.createElement('iframe');
+  fr.style.cssText='width:100%;height:390px;border:none;display:block';
+  el.appendChild(fr);
+  fr.contentDocument.open();fr.contentDocument.write(html);fr.contentDocument.close();
+  try{
+    const s=fr.contentDocument.createElement('style');
+    s.textContent='html,body{margin:0;padding:0;overflow:hidden;background:white}canvas{width:100%!important;height:100%!important}';
+    fr.contentDocument.head.appendChild(s);
+  }catch(e){}
+}
+function go(n){
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));
+  document.querySelectorAll('.sh').forEach(h=>h.classList.remove('on'));
+  $('p-'+n).classList.add('on');$('sh-'+n).classList.add('on');
+}
+function markDone(n){$('sh-'+n).classList.add('done')}
+function switchSrc(id,btn){
+  document.querySelectorAll('.sb').forEach(b=>b.classList.remove('on'));
+  document.querySelectorAll('.lp').forEach(p=>p.classList.remove('on'));
+  $('lp-'+id).classList.add('on');btn.classList.add('on');
+}
+function showQ(q,id){
+  const cp=(q.backbone_completeness*100).toFixed(1);
+  const cc=q.backbone_completeness>.98?'ok':q.backbone_completeness>.94?'wn':'er';
+  $(id).innerHTML=`<div class="mets">
+    <div class="met"><div class="v">${q.n_chains}</div><div class="l">Chains</div></div>
+    <div class="met"><div class="v">${q.n_residues}</div><div class="l">Residues</div></div>
+    <div class="met"><div class="v">${q.n_atoms}</div><div class="l">Atoms</div></div>
+    <div class="met ${cc}"><div class="v">${cp}%</div><div class="l">BB completeness</div></div>
+    <div class="met ${q.n_heterogens>0?'wn':'ok'}"><div class="v">${q.n_heterogens}</div><div class="l">Heterogens</div></div>
+    <div class="met"><div class="v">${q.n_waters}</div><div class="l">Waters</div></div>
+    <div class="met ${q.n_missing_bb_res>0?'wn':'ok'}"><div class="v">${q.n_missing_bb_res}</div><div class="l">Missing BB</div></div>
+    <div class="met"><div class="v">${q.bfactor_mean}</div><div class="l">Mean B-factor</div></div>
+  </div>`;
+}
+
+let _vcol1='chain',_vcol2='chain';
+function setVCol(c,btn){
+  btn.closest('.vcb-row').querySelectorAll('.vcb').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on'); _vcol1=c;
+  pj('/api/view_raw',{color_by:c}).then(d=>{if(!d.error)pv($('v-1'),d.html);});
+}
+function setVCol2(c,btn){
+  btn.closest('.vcb-row').querySelectorAll('.vcb').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on'); _vcol2=c;
+  pj('/api/view_raw',{color_by:c}).then(d=>{if(!d.error)pv($('v-2'),d.html);});
+}
+
+async function _afterLoad(d){
+  if(d.error){bnr('load-s',d.error,'err');return;}
+  bnr('load-s','✓ '+d.msg,'ok');markDone(1);
+  if(d.meta&&d.meta.title){
+    $('load-meta').innerHTML=`<div class="bnr bnr-info">
+      <strong>${d.meta.pdb_id||''}</strong> — ${d.meta.title}
+      &nbsp;·&nbsp;Method: ${d.meta.method}
+      &nbsp;·&nbsp;Resolution: ${d.meta.resolution} Å
+      &nbsp;·&nbsp;<em>${d.meta.organism}</em>
+    </div>`;
+  }
+  showQ(d.quality,'q-before');markDone(2);
+  const vd=await pj('/api/view_raw',{color_by:'chain'});
+  if(!vd.error){pv($('v-1'),vd.html);pv($('v-2'),vd.html);}
+}
+async function loadRCSB(){
+  const id=$('pdbid').value.trim().toUpperCase();
+  if(!id){bnr('load-s','Enter a 4-character PDB ID.','warn');return;}
+  bnr('load-s',sp(`Fetching ${id} from RCSB…`),'info');
+  _afterLoad(await pj('/api/fetch_pdb',{pdb_id:id}));
+}
+async function uploadFile(){
+  const f=$('pdbfile').files[0];
+  if(!f){bnr('load-s','Select a PDB file.','warn');return;}
+  bnr('load-s',sp('Parsing…'),'info');
+  const fd=new FormData();fd.append('file',f);
+  _afterLoad(await fetch('/api/upload_pdb',{method:'POST',body:fd}).then(r=>r.json()));
+}
+
+async function doFix(){
+  bnr('fix-s',sp('Running PDBFixer… (15–40 s for large proteins)'),'info');
+  $('fix-changes').innerHTML='';
+  const d=await pj('/api/fix',{
+    remove_het:$('ck-het').checked,remove_water:$('ck-wat').checked,
+    add_res:$('ck-res').checked,add_h:$('ck-h').checked,ph:+$('fix-ph').value});
+  if(d.error){bnr('fix-s',d.error,'err');return;}
+  bnr('fix-s','✓ '+d.msg,'ok');markDone(3);
+  const steps=(d.fix_report.steps||[]).map(s=>`• ${s}`).join('<br>');
+  const ch=(d.changes||[]).join(' · ');
+  $('fix-changes').innerHTML=`<div class="bnr bnr-info">
+    <strong>Steps applied:</strong><br>${steps}
+    ${ch?`<br><strong>Net changes:</strong> ${ch}`:''}
+  </div>`;
+  showQ(d.quality_after,'q-after');
+  if(d.html)pv($('v-3'),d.html);
+}
+
+async function doProt(){
+  bnr('prot-s',sp('Analysing protonation states…'),'info');
+  const d=await pj('/api/protonation',{ph:+$('prot-ph').value});
+  if(d.error){bnr('prot-s',d.error,'err');return;}
+  bnr('prot-s','','');markDone(4);
+  $('prot-mets').innerHTML=`
+    <div class="met"><div class="v">${d.n_total}</div><div class="l">Titratable res.</div></div>
+    <div class="met ${d.n_ambiguous>0?'wn':'ok'}"><div class="v">${d.n_ambiguous}</div><div class="l">Ambiguous</div></div>
+    <div class="met"><div class="v">${d.ph}</div><div class="l">pH</div></div>`;
+  if(d.recommendations&&d.recommendations.length)
+    $('prot-recs').innerHTML=d.recommendations.map(r=>`<div class="bnr bnr-warn">⚠ ${r}</div>`).join('');
+  else $('prot-recs').innerHTML='';
+  if(d.img){const im=$('prot-img');im.src=d.img;im.style.display='block';}
+  if(d.ambiguous&&d.ambiguous.length){
+    $('prot-tbl').innerHTML='<div style="font-size:.72rem;font-weight:600;color:var(--burg2);margin:.45rem 0 .28rem">Ambiguous residues — review before docking:</div>'+
+      tbl(d.ambiguous,['resname','chain','resnum','pka','delta_pH_pKa','frac_protonated','predominant_state']);
+  } else {
+    $('prot-tbl').innerHTML=`<div class="bnr bnr-ok">No ambiguous residues at pH ${d.ph}.</div>`;
+  }
+}
+
+async function doConvert(){
+  bnr('conv-s',sp('Converting to PDBQT…'),'info');
+  const d=await pj('/api/convert',{});
+  if(d.error){bnr('conv-s',d.error,'err');return;}
+  bnr('conv-s','✓ '+d.msg,'ok');markDone(5);
+  $('conv-pre').style.display='block';
+  $('conv-pre').textContent=d.preview+'\n…\n[Preview — download for complete file]';
+  $('dl-pdbqt').style.display='inline-flex';
+}
+
+let _lining=[];
+async function doPockets(){
+  bnr('poc-s',sp('Detecting binding sites… (30–90 s depending on protein size and resolution)'),'info');
+  $('poc-cards').innerHTML='';$('poc-tbl').innerHTML='';
+  $('poc-img').style.display='none';
+  const d=await pj('/api/pockets',{
+    resolution:+$('p-res').value,min_volume:+$('p-vol').value,n_top:+$('p-n').value});
+  if(d.error){bnr('poc-s',d.error,'err');return;}
+  const pockets=d.pockets||[];_lining=d.lining||[];
+  if(!pockets.length){
+    bnr('poc-s','No pockets detected. Try: lower minimum volume, finer resolution (0.8 Å), or check if structure was prepared in Step 3.','warn');
+    return;
+  }
+  bnr('poc-s',`✓ ${pockets.length} binding site(s) detected.`,'ok');markDone(6);
+  if(d.img){const im=$('poc-img');im.src=d.img;im.style.display='block';}
+  $('poc-cards').innerHTML=pockets.map((p,i)=>`
+    <div class="pc" id="pc-${i}" onclick="showLining(${i})">
+      <h4>Site ${i+1} &nbsp;<span style="font-weight:400;font-size:.71rem;color:var(--muted)">score ${p.druggability_score}</span></h4>
+      <div class="pc-meta">
+        Volume: ${p.volume_A3.toFixed(0)} Å³<br>
+        Hydrophobic: ${(p.hydrophobic_frac*100).toFixed(0)}% · Buried: ${(p.buriedness*100).toFixed(0)}%<br>
+        Center: (${p.center_x}, ${p.center_y}, ${p.center_z}) Å<br>
+        Lining residues: ${p.n_lining_residues}
+      </div>
+      <div class="bar-bg"><div class="bar-fill" style="width:${Math.min(p.druggability_score*100,100).toFixed(0)}%"></div></div>
+    </div>`).join('');
+  if(d.html)pv($('v-6'),d.html);
+}
+function showLining(i){
+  document.querySelectorAll('.pc').forEach(c=>c.classList.remove('on'));
+  $('pc-'+i).classList.add('on');
+  $('poc-tbl').innerHTML=(_lining[i]&&_lining[i].length)?
+    '<div style="font-size:.72rem;font-weight:600;color:var(--burg2);margin:.45rem 0 .28rem">Lining residues — Site '+(i+1)+' (use for docking grid box):</div>'+
+    tbl(_lining[i],['chain','resnum','resname','class']):
+    '<div class="bnr bnr-warn">No lining residues.</div>';
+}
+</script>
+</body>
+</html>
