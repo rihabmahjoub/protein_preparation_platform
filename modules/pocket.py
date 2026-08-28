@@ -1,27 +1,31 @@
 """
 modules/pocket.py — Protein Preparation for Docking
-Binding pocket detection using a grid-based geometric algorithm.
+Binding pocket detection using a grid-based geometric algorithm
+(LIGSITE-style PSP scan, following Hendlich et al. 1997 / SURFNET).
 
 The protein's heavy atoms are mapped onto a 3D voxel grid using their
-realistic van der Waals radii (+ a standard 1.4 Å water probe) to build
-an accurate solvent-excluded protein mask. A separate morphological
-closing step then seals narrow pocket mouths — without swallowing the
-interior volume of wider pockets — before exterior solvent is identified
-by flood-fill from a padded boundary. Enclosed voxels that are not
-protein are candidate pockets. Connected components are labeled and
-scored by volume, hydrophobic content and buriedness.
+realistic van der Waals radii + a standard 1.4 Å water probe. For every
+free (solvent) voxel, the algorithm scans outward along 7 principal
+directions (the 3 axes + 4 cube diagonals). A direction registers a
+"protein-solvent-protein" (PSP) event if protein is found within
+MAX_DIST_A on BOTH sides of the voxel along that line. A voxel is
+flagged as part of a pocket if at least MIN_DIRECTIONS of the 7 scan
+lines register a PSP event.
 
-Two-probe design:
-  PROBE (1.4 Å)          — builds the base protein occupancy mask.
-  CLOSING_RADIUS (2.0 Å) — morphological closing applied to that mask,
-                            only to bridge gaps narrower than roughly
-                            2 * CLOSING_RADIUS. Wider gaps (most real
-                            binding-site mouths, e.g. kinase ATP sites)
-                            are left untouched, so their interior volume
-                            is preserved as free space rather than being
-                            absorbed into the protein mask.
+This is a *local* enclosure test, not a global flood-fill/topological
+one. That distinction matters: many real binding sites — including most
+kinase ATP pockets — are wide, shallow clefts whose mouths are open to
+bulk solvent. A global "enclosed cavity" test (flood-fill from the grid
+boundary, or morphological closing of the protein mask) systematically
+misses these, because any single closing radius large enough to seal a
+wide mouth also fills in the pocket itself when the mouth is wide
+relative to the pocket's own depth — which is the case for most real
+drug-binding clefts. The PSP scan avoids this failure mode entirely: it
+never requires topological enclosure, only that the protein "frames" the
+voxel from multiple directions within a plausible pocket-scale distance.
 
 References:
+  Hendlich M, Rippmann F, Barnickel G (1997) LIGSITE. J Mol Graph Model 15:359-363.
   Laskowski RA (1995) SURFNET. J Mol Graph 13:323-330.
   Le Guilloux V et al. (2009) Fpocket. BMC Bioinformatics 10:168.
   Halgren TA (2009) Druggability. J Chem Inf Model 49:377-389.
@@ -35,11 +39,21 @@ VDW = {"C":1.70,"N":1.55,"O":1.52,"S":1.80,"H":1.20,"P":1.80,
        "F":1.47,"CL":1.75,"BR":1.85,"I":1.98,"SE":1.90,
        "FE":2.05,"ZN":1.39,"MG":1.73,"CA":1.74,"MN":1.73}
 
-PROBE          = 1.4   # Å — standard water probe, used only to build an
-                        #     accurate solvent-excluded protein mask
-CLOSING_RADIUS = 2.0    # Å — separate morphological closing radius, used
-                        #     ONLY to seal narrow pocket mouths, never to
-                        #     inflate the base occupancy mask itself
+PROBE          = 1.4   # Å — standard water probe, used to build an accurate
+                        #     solvent-excluded protein mask
+MAX_DIST_A     = 12.0  # Å — how far the PSP scan looks for protein along
+                        #     each of the 7 directions. Raise to catch wider
+                        #     clefts; lower to require tighter enclosure.
+MIN_DIRECTIONS = 4     # out of 7 scan lines that must show a PSP event for
+                        #     a voxel to count as "pocket". Lower = more
+                        #     permissive (more, shallower pockets); higher =
+                        #     stricter (fewer, more enclosed pockets).
+
+# 3 axes + 4 cube diagonals — the 7 principal directions used by LIGSITE.
+_DIRECTIONS = [
+    (1,0,0), (0,1,0), (0,0,1),
+    (1,1,1), (1,1,-1), (1,-1,1), (1,-1,-1),
+]
 
 HYDROPHOBIC = {"ALA","VAL","ILE","LEU","MET","PHE","TRP","PRO","CYS"}
 POLAR       = {"SER","THR","ASN","GLN","TYR","HIS","GLY"}
@@ -70,18 +84,54 @@ def _heavy_atoms(structure):
     return np.array(coords, dtype=float), elements, residues
 
 
+def _shift(mask, direction, step):
+    """Return `mask` shifted by `step` voxels along `direction` (zero-padded)."""
+    out = np.zeros_like(mask)
+    src, dst = [], []
+    for d, n in zip(direction, mask.shape):
+        s = d * step
+        if s > 0:
+            src.append(slice(s, n));    dst.append(slice(0, n - s))
+        elif s < 0:
+            src.append(slice(0, n + s)); dst.append(slice(-s, n))
+        else:
+            src.append(slice(0, n));    dst.append(slice(0, n))
+    out[tuple(dst)] = mask[tuple(src)]
+    return out
+
+
+def _first_hit_within(protein, direction, max_steps):
+    """
+    For every voxel, is `protein` reached within `max_steps` when scanning
+    along `direction`? Vectorized: accumulate shifted copies of `protein`
+    one step at a time and record the first hit.
+    """
+    hit = np.zeros(protein.shape, dtype=bool)
+    for step in range(1, max_steps + 1):
+        hit |= _shift(protein, direction, step)
+    return hit
+
+
 def detect_pockets(structure, resolution:float=1.0,
-                   min_volume:float=150.0, n_top:int=5) -> list:
+                   min_volume:float=150.0, n_top:int=5,
+                   max_dist_A:float=MAX_DIST_A,
+                   min_directions:int=MIN_DIRECTIONS) -> list:
     """
     Detect and rank binding pockets in a prepared protein structure.
 
     Parameters
     ----------
-    resolution  : grid spacing in Å. Smaller = more accurate but slower.
-                  Recommended: 1.0 Å for standard proteins, 1.5 Å for large ones.
-    min_volume  : minimum cavity volume in Å³ to report.
-                  Increase to filter false positives; decrease to find small pockets.
-    n_top       : maximum number of pockets to return, ranked by druggability score.
+    resolution     : grid spacing in Å. Smaller = more accurate but slower.
+                      Recommended: 1.0 Å for standard proteins, 1.5 Å for large ones.
+    min_volume     : minimum pocket volume in Å³ to report.
+                      Increase to filter false positives; decrease to find small pockets.
+    n_top          : maximum number of pockets to return, ranked by druggability score.
+    max_dist_A     : Å — how far the PSP scan looks for protein along each of the
+                      7 directions. Widen for large, shallow clefts; narrow to
+                      require tighter, more classically "buried" pockets.
+    min_directions : out of 7 scan directions that must register a PSP event.
+                      Lower is more permissive (catches shallower/open clefts,
+                      at the cost of more surface noise); higher is stricter.
 
     Returns
     -------
@@ -89,21 +139,13 @@ def detect_pockets(structure, resolution:float=1.0,
 
     Notes on detection limits
     --------------------------
-    Only *topologically enclosed* free-voxel regions are reported — pockets
-    whose entrance, at the chosen resolution and CLOSING_RADIUS, ends up
-    sealed from bulk solvent. Two failure modes are expected regardless of
-    parameter tuning:
-      1. Pockets with a mouth wider than ~2*CLOSING_RADIUS remain connected
-         to the exterior and go unreported, even if the interior cavity is
-         well-formed and druggable. Raise CLOSING_RADIUS to catch wider
-         mouths (at the cost of also sealing more of the true surface).
-      2. Elongated, multi-domain, or scaffold-type proteins whose binding
-         surface is a shallow, open groove (rather than an enclosed
-         globular pocket) are structurally unlikely to yield any enclosed
-         cavity at all. A "no pockets detected" result should be treated
-         as inconclusive, not as proof the protein has no druggable site —
-         an alpha-sphere-based method (e.g. fpocket) is better suited to
-         open/shallow interaction surfaces.
+    This is a local PSP (protein-solvent-protein) scan, not a global
+    flood-fill enclosure test — it will find wide, shallow clefts (e.g.
+    most kinase ATP pockets) that a topological-enclosure method would
+    miss. It can still under-report very large, gently curved binding
+    surfaces (e.g. some protein-protein interaction grooves) if fewer
+    than `min_directions` scan lines find protein within `max_dist_A`;
+    for those, try raising `max_dist_A` and/or lowering `min_directions`.
     """
     coords, elements, residues = _heavy_atoms(structure)
     if len(coords) == 0:
@@ -111,7 +153,7 @@ def detect_pockets(structure, resolution:float=1.0,
 
     radii = np.array([VDW.get(el, 1.70) + PROBE for el in elements])
 
-    margin = 6.0
+    margin = max(6.0, max_dist_A)
     lo    = coords.min(axis=0) - margin
     hi    = coords.max(axis=0) + margin
     shape = (np.ceil((hi - lo) / resolution)).astype(int) + 1
@@ -128,23 +170,20 @@ def detect_pockets(structure, resolution:float=1.0,
         gpts = np.stack([gx,gy,gz],axis=-1).astype(float)*resolution+lo
         protein[x0:x1,y0:y1,z0:z1] |= np.sum((gpts-ac)**2,axis=-1) <= rad*rad
 
-    # ── seal narrow pocket mouths without consuming pocket volume ──────────────
-    # Morphological closing (dilate then erode): a gap wider than roughly
-    # 2*CLOSING_RADIUS survives untouched; a genuinely narrow mouth gets
-    # bridged and stays sealed, while the pocket's interior volume — which
-    # was never inflated in the first place — is preserved as free space.
-    closing_iter = max(1, int(round(CLOSING_RADIUS / resolution)))
-    protein_sealed = ndimage.binary_closing(protein, iterations=closing_iter)
+    # ── LIGSITE-style PSP scan ───────────────────────────────────────────────
+    max_steps = int(np.ceil(max_dist_A / resolution))
+    psp_count = np.zeros(shape, dtype=np.int8)
+    for d in _DIRECTIONS:
+        dp, dm = np.array(d), -np.array(d)
+        hit_plus  = _first_hit_within(protein, tuple(dp), max_steps)
+        hit_minus = _first_hit_within(protein, tuple(dm), max_steps)
+        psp_count += (hit_plus & hit_minus).astype(np.int8)
 
-    # ── exterior detection via padded labelling ────────────────────────────────
-    free   = ~protein_sealed
-    padded = np.pad(free, 1, mode="constant", constant_values=True)
-    plab, _= ndimage.label(padded)
-    ext    = plab[0,0,0]
-    pcav   = padded & (plab != ext)
-    cavity = pcav[1:-1,1:-1,1:-1]
+    pocket_mask = (~protein) & (psp_count >= min_directions)
 
-    poc_lab, n_poc = ndimage.label(cavity)
+    poc_lab, n_poc = ndimage.label(
+        pocket_mask, structure=ndimage.generate_binary_structure(3, 3)
+    )
     if n_poc == 0:
         return []
 
@@ -170,17 +209,10 @@ def detect_pockets(structure, resolution:float=1.0,
             ch,rnum,rname = residues[ai]
             lining_res[(ch,rnum)] = rname
         hf = sum(1 for rn in lining_res.values() if rn in HYDROPHOBIC)/max(len(lining_res),1)
-        # Buriedness: fraction of the pocket's dilated boundary that touches
-        # exterior-labelled free space. Dilation here uses 26-connectivity
-        # (full 3x3x3 structuring element) on purpose — it must be strictly
-        # wider than the 6-connectivity used by ndimage.label above, or a
-        # pocket voxel (by definition never 6-connectivity-adjacent to an
-        # exterior voxel) would never register any surface contact and
-        # buriedness would trivially always be ~1.0.
-        struct26 = ndimage.generate_binary_structure(3, 3)
-        dilated  = ndimage.binary_dilation(pmask, structure=struct26)
-        surf     = int((dilated & (plab[1:-1,1:-1,1:-1]==ext)).sum())
-        buried   = 1.0 - min(surf/max(n_vox,1), 1.0)
+        # Buriedness: average fraction of the 7 scan directions that hit
+        # protein on both sides, over this pocket's voxels (0 = barely
+        # enclosed, 1 = enclosed from every direction).
+        buried = float(psp_count[pmask].mean()) / len(_DIRECTIONS)
         vs = float(np.exp(-((vol-700)/450)**2))
         ds = round(0.40*vs + 0.35*(hf**1.5) + 0.25*buried, 3)
         pockets.append({
