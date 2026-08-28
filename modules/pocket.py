@@ -2,13 +2,24 @@
 modules/pocket.py — Protein Preparation for Docking
 Binding pocket detection using a grid-based geometric algorithm.
 
-The protein's heavy atoms are mapped onto a 3D voxel grid. Exterior
-solvent is identified by flood-fill from a padded boundary. Enclosed
-voxels that are not protein are candidate pockets. Connected components
-are labeled and scored by volume, hydrophobic content and buriedness.
+The protein's heavy atoms are mapped onto a 3D voxel grid using their
+realistic van der Waals radii (+ a standard 1.4 Å water probe) to build
+an accurate solvent-excluded protein mask. A separate morphological
+closing step then seals narrow pocket mouths — without swallowing the
+interior volume of wider pockets — before exterior solvent is identified
+by flood-fill from a padded boundary. Enclosed voxels that are not
+protein are candidate pockets. Connected components are labeled and
+scored by volume, hydrophobic content and buriedness.
 
-PROBE = 2.0 Å (larger than the 1.4 Å water radius) to seal partially
-open pockets such as kinase ATP-binding sites, as used in SURFNET-Ref.
+Two-probe design:
+  PROBE (1.4 Å)          — builds the base protein occupancy mask.
+  CLOSING_RADIUS (2.0 Å) — morphological closing applied to that mask,
+                            only to bridge gaps narrower than roughly
+                            2 * CLOSING_RADIUS. Wider gaps (most real
+                            binding-site mouths, e.g. kinase ATP sites)
+                            are left untouched, so their interior volume
+                            is preserved as free space rather than being
+                            absorbed into the protein mask.
 
 References:
   Laskowski RA (1995) SURFNET. J Mol Graph 13:323-330.
@@ -23,7 +34,12 @@ from scipy.spatial import cKDTree
 VDW = {"C":1.70,"N":1.55,"O":1.52,"S":1.80,"H":1.20,"P":1.80,
        "F":1.47,"CL":1.75,"BR":1.85,"I":1.98,"SE":1.90,
        "FE":2.05,"ZN":1.39,"MG":1.73,"CA":1.74,"MN":1.73}
-PROBE = 2.0   # Å — enlarged to seal partially open cavities
+
+PROBE          = 1.4   # Å — standard water probe, used only to build an
+                        #     accurate solvent-excluded protein mask
+CLOSING_RADIUS = 2.0    # Å — separate morphological closing radius, used
+                        #     ONLY to seal narrow pocket mouths, never to
+                        #     inflate the base occupancy mask itself
 
 HYDROPHOBIC = {"ALA","VAL","ILE","LEU","MET","PHE","TRP","PRO","CYS"}
 POLAR       = {"SER","THR","ASN","GLN","TYR","HIS","GLY"}
@@ -70,6 +86,24 @@ def detect_pockets(structure, resolution:float=1.0,
     Returns
     -------
     list of dicts sorted by druggability_score (descending).
+
+    Notes on detection limits
+    --------------------------
+    Only *topologically enclosed* free-voxel regions are reported — pockets
+    whose entrance, at the chosen resolution and CLOSING_RADIUS, ends up
+    sealed from bulk solvent. Two failure modes are expected regardless of
+    parameter tuning:
+      1. Pockets with a mouth wider than ~2*CLOSING_RADIUS remain connected
+         to the exterior and go unreported, even if the interior cavity is
+         well-formed and druggable. Raise CLOSING_RADIUS to catch wider
+         mouths (at the cost of also sealing more of the true surface).
+      2. Elongated, multi-domain, or scaffold-type proteins whose binding
+         surface is a shallow, open groove (rather than an enclosed
+         globular pocket) are structurally unlikely to yield any enclosed
+         cavity at all. A "no pockets detected" result should be treated
+         as inconclusive, not as proof the protein has no druggable site —
+         an alpha-sphere-based method (e.g. fpocket) is better suited to
+         open/shallow interaction surfaces.
     """
     coords, elements, residues = _heavy_atoms(structure)
     if len(coords) == 0:
@@ -82,7 +116,7 @@ def detect_pockets(structure, resolution:float=1.0,
     hi    = coords.max(axis=0) + margin
     shape = (np.ceil((hi - lo) / resolution)).astype(int) + 1
 
-    # ── protein mask ──────────────────────────────────────────────────────────
+    # ── protein mask (realistic radii, standard solvent probe only) ────────────
     protein = np.zeros(shape, dtype=bool)
     for ac, rad in zip(coords, radii):
         idx  = ((ac - lo) / resolution).astype(int)
@@ -94,8 +128,16 @@ def detect_pockets(structure, resolution:float=1.0,
         gpts = np.stack([gx,gy,gz],axis=-1).astype(float)*resolution+lo
         protein[x0:x1,y0:y1,z0:z1] |= np.sum((gpts-ac)**2,axis=-1) <= rad*rad
 
-    # ── exterior detection via padded labelling ───────────────────────────────
-    free   = ~protein
+    # ── seal narrow pocket mouths without consuming pocket volume ──────────────
+    # Morphological closing (dilate then erode): a gap wider than roughly
+    # 2*CLOSING_RADIUS survives untouched; a genuinely narrow mouth gets
+    # bridged and stays sealed, while the pocket's interior volume — which
+    # was never inflated in the first place — is preserved as free space.
+    closing_iter = max(1, int(round(CLOSING_RADIUS / resolution)))
+    protein_sealed = ndimage.binary_closing(protein, iterations=closing_iter)
+
+    # ── exterior detection via padded labelling ────────────────────────────────
+    free   = ~protein_sealed
     padded = np.pad(free, 1, mode="constant", constant_values=True)
     plab, _= ndimage.label(padded)
     ext    = plab[0,0,0]
@@ -128,9 +170,17 @@ def detect_pockets(structure, resolution:float=1.0,
             ch,rnum,rname = residues[ai]
             lining_res[(ch,rnum)] = rname
         hf = sum(1 for rn in lining_res.values() if rn in HYDROPHOBIC)/max(len(lining_res),1)
-        dilated = ndimage.binary_dilation(pmask)
-        surf    = int((dilated & (plab[1:-1,1:-1,1:-1]==ext)).sum())
-        buried  = 1.0 - min(surf/max(n_vox,1), 1.0)
+        # Buriedness: fraction of the pocket's dilated boundary that touches
+        # exterior-labelled free space. Dilation here uses 26-connectivity
+        # (full 3x3x3 structuring element) on purpose — it must be strictly
+        # wider than the 6-connectivity used by ndimage.label above, or a
+        # pocket voxel (by definition never 6-connectivity-adjacent to an
+        # exterior voxel) would never register any surface contact and
+        # buriedness would trivially always be ~1.0.
+        struct26 = ndimage.generate_binary_structure(3, 3)
+        dilated  = ndimage.binary_dilation(pmask, structure=struct26)
+        surf     = int((dilated & (plab[1:-1,1:-1,1:-1]==ext)).sum())
+        buried   = 1.0 - min(surf/max(n_vox,1), 1.0)
         vs = float(np.exp(-((vol-700)/450)**2))
         ds = round(0.40*vs + 0.35*(hf**1.5) + 0.25*buried, 3)
         pockets.append({
